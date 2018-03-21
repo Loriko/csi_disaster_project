@@ -2,6 +2,7 @@ import csv
 import psycopg2
 import psycopg2.extras
 import sys
+import json
 import pprint
 from datetime import date
 import holidays
@@ -148,7 +149,55 @@ def create_populate_date_dimension():
     populate_date_dimension_holidays(NORTH_AMERICAN_HOLIDAYS)
 
 
+def create_summary_dimension():
+    # Create empty summary table
+    create_summary_dimension_query = """
+        DROP TABLE IF EXISTS fact;
+        DROP TABLE IF EXISTS disaster_db.disaster_db_schema.summary_dimension;
+        
+        CREATE TABLE disaster_db.disaster_db_schema.summary_dimension
+        (
+          summary_key   SERIAL,
+          summary       VARCHAR(300),
+          keyword_1     VARCHAR(20),
+          keyword_2     VARCHAR(20),
+          keyword_3     VARCHAR(20),
+          PRIMARY KEY (summary_key)
+        );
+    """
+    execute_query(create_summary_dimension_query)
+
+
+def populate_summary_dimension_row(csv_row):
+    comment = csv_row[COMMENT_INDEX]
+    if comment == "" or comment is None:
+        comment = "NULL"
+    else:
+        comment = "'" + comment + "'"
+    matching_keywords_list = []
+    keyword_list = json.load(open("summary_keyword_list.json"))
+    for keyword in keyword_list:
+        if keyword in comment:
+            matching_keywords_list.append(keyword)
+    keyword1 = "NULL"
+    keyword2 = "NULL"
+    keyword3 = "NULL"
+    if len(matching_keywords_list) >= 1:
+        keyword1 = "'" + matching_keywords_list[0] + "'"
+        if len(matching_keywords_list) >= 2:
+            keyword2 = "'" + matching_keywords_list[1] + "'"
+            if len(matching_keywords_list) >= 3:
+                keyword3 = "'" + matching_keywords_list[2] + "'"
+    sql_script = """
+        INSERT INTO disaster_db.disaster_db_schema.summary_dimension(summary, keyword_1, keyword_2, keyword_3)
+        VALUES (
+          %s, %s, %s, %s
+        );
+    """ % (comment, keyword1, keyword2, keyword3)
+
+
 def create_data_mart():
     log("Starting creation of data mart")
     # Start calling create_populate methods here
     create_populate_date_dimension()
+    create_summary_dimension()

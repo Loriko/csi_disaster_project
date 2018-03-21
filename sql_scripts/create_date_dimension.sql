@@ -1,8 +1,9 @@
 -- Found at https://medium.com/@duffn/creating-a-date-dimension-table-in-postgresql-af3f8e2941ac
 -- Some modifications were made to add meteorological_season, is_holiday and holiday_text
-DROP TABLE if exists date_dimension;
+DROP TABLE IF EXISTS fact;
+DROP TABLE if exists disaster_db.disaster_db_schema.date_dimension;
 
-CREATE TABLE date_dimension
+CREATE TABLE disaster_db.disaster_db_schema.date_dimension
 (
   date_key                 INT NOT NULL,
   date_actual              DATE NOT NULL,
@@ -38,14 +39,14 @@ CREATE TABLE date_dimension
   meteorological_season    VARCHAR(10)
 );
 
-ALTER TABLE public.date_dimension ADD CONSTRAINT date_dimension_date_key_pk PRIMARY KEY (date_key);
+ALTER TABLE disaster_db.disaster_db_schema.date_dimension ADD CONSTRAINT date_dimension_date_key_pk PRIMARY KEY (date_key);
 
 CREATE INDEX date_dimension_date_actual_idx
-  ON date_dimension(date_actual);
+  ON disaster_db.disaster_db_schema.date_dimension(date_actual);
 
 COMMIT;
 
-INSERT INTO date_dimension
+INSERT INTO disaster_db.disaster_db_schema.date_dimension
   SELECT TO_CHAR(datum,'yyyymmdd')::INT AS date_key,
          datum AS date_actual,
          EXTRACT(epoch FROM datum) AS epoch,
