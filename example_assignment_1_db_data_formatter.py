@@ -247,9 +247,7 @@ def populate_posted_date_dimension_holidays():
                 date_actual
         FROM    public.posted_date_dimension;
     """
-
     holiday_dates_list = []
-
     results = execute_query(get_posted_date_rows_query)
     for row in results:
         date_dimension_id = row[0]

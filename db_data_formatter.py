@@ -9,7 +9,7 @@ import traceback
 
 LOGGING_TURNED_ON = True
 CONNECTION_STRING = "host='localhost' dbname='disaster_db' user='postgres' password='password'"
-us_holidays = holidays.UnitedStates()
+NORTH_AMERICAN_HOLIDAYS = holidays.UnitedStates() + holidays.Canada() + holidays.Mexico()
 CSV_FILE_LOCATION = "canadian_disaster_database_source_data.csv"
 CONNECTION = psycopg2.connect(CONNECTION_STRING)
 
@@ -96,6 +96,59 @@ def execute_query(query):
         return results
 
 
+def execute_scripts_from_file(filename):
+    # Open and read the file as a single buffer
+    fd = open(filename, "r")
+    sqlFile = fd.read()
+    fd.close()
+    # all SQL commands (split on ';')
+    sqlCommands = sqlFile.split(";")
+    # Execute every command from the input file
+    for command in sqlCommands:
+        # This will skip and report errors
+        # For example, if the tables do not yet exist, this will skip over
+        # the DROP TABLE commands
+        try:
+            execute_query(command)
+        except:
+            print_stack_trace()
+
+
+#
+def populate_date_dimension_holidays(holidays_list):
+    # gets all rows in the reported date dimension
+    get_date_dimension_rows_query = """
+        SELECT  date_key,
+                date_actual
+        FROM    public.date_dimension;
+    """
+    holiday_dates_list = []
+    results = execute_query(get_date_dimension_rows_query)
+    for row in results:
+        date_dimension_id = row[0]
+        is_holiday = row[1] in holidays_list
+        holiday_text = holidays_list.get(row[1])
+        if is_holiday:
+            holiday_text = holiday_text.replace("'", "''")
+            holiday_dates_list.append(date_dimension_id)
+            update_query = """
+                UPDATE  public.date_dimension
+                SET     is_holiday = TRUE,
+                        holiday_text = '%s'
+                WHERE   posted_date_key = '%s';
+            """ % (holiday_text, date_dimension_id)
+            execute_query(update_query)
+    print_success('Updated %d dates out of %d' % (len(holiday_dates_list), len(results)))
+
+
+def create_populate_date_dimension():
+    # Execute create_date_dimension_script
+    execute_scripts_from_file("sql_scripts/create_date_dimension.sql")
+    # Fill holidays using canadian holiday data
+    populate_date_dimension_holidays(NORTH_AMERICAN_HOLIDAYS)
+
+
 def create_data_mart():
     log("Starting creation of data mart")
     # Start calling create_populate methods here
+    create_populate_date_dimension()
