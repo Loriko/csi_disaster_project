@@ -14,7 +14,7 @@ SHAPE_INDEX = 3
 DURATION_INDEX = 4
 SUMMARY_INDEX = 5
 POSTED_DATE_INDEX = 6
-CONNECTION_STRING = "host='localhost' dbname='postgres' user='postgres' password='safyrya89'"
+CONNECTION_STRING = "host='localhost' dbname='postgres' user='postgres' password='password'"
 us_holidays = holidays.UnitedStates()
 CSV_FILE_LOCATION = "nuforcScrape.csv"
 
