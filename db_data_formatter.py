@@ -12,6 +12,8 @@ LOGGING_TURNED_ON = True
 CONNECTION_STRING = "host='localhost' dbname='disaster_db' user='postgres' password='password'"
 NORTH_AMERICAN_HOLIDAYS = holidays.UnitedStates() + holidays.Canada() + holidays.Mexico()
 CSV_FILE_LOCATION = "canadian_disaster_database_source_data.csv"
+OLD_LOCATION_FILE_LOCATION = "place_column.csv"
+LOCATION_FILE_LOCATION = "location_data.csv"
 CONNECTION = psycopg2.connect(CONNECTION_STRING)
 
 # labeling the indexes of the columns of the source disaster csv file
@@ -219,6 +221,7 @@ def populate_disaster_dimension(csv_row):
 
     execute_query(sql_script)
 
+
 def create_disaster_dimension():
     # Create empty disaster table
     create_summary_dimension_query = """
@@ -312,6 +315,30 @@ def create_cost_dimension():
     execute_query(create_cost_dimension_query)
 
 
+def create_location_dimension():
+    with open(CSV_FILE_LOCATION, "rb") as csv_file:
+        csv_reader = csv.reader(csv_file)
+        for csv_row in csv_reader:
+            # do something
+            place = csv_row[PLACE_INDEX]
+            raise NotImplementedError()
+
+
+def select_distinct_locations_into_new_csv():
+    with open(OLD_LOCATION_FILE_LOCATION, "rb") as csv_file:
+        csv_reader = csv.reader(csv_file)
+        with open("new_" + LOCATION_FILE_LOCATION, "wb") as new_csv_file:
+            csv_writer = csv.writer(new_csv_file)
+            distinct_locations = []
+            for old_row in csv_reader:
+                # OLD_LOCATION_FILE only has one column containing the location
+                if old_row[0] not in distinct_locations:
+                    distinct_locations.append(old_row[0])
+            for new_row in distinct_locations:
+                csv_writer.writerow((new_row,))
+    print_success("Created new location file only containing distinct locations")
+
+
 def create_data_mart():
     log("Starting creation of data mart")
     # Start calling create_populate methods here
@@ -319,3 +346,7 @@ def create_data_mart():
     create_summary_dimension()
     create_disaster_dimension()
     create_cost_dimension()
+    create_location_dimension()
+
+
+select_distinct_locations_into_new_csv()
