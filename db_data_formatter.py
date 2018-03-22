@@ -206,16 +206,16 @@ def populate_disaster_dimension(csv_row):
     magnitude = csv_row[MAGNITUDE_INDEX]
     utility_people_affected = csv_row[UTILITY_PEOPLE_AFFECTED_INDEX]
 
-    if magnitude is None:
-        magnitude = 0
+    if magnitude == "":
+        magnitude = "NULL"
     
-    if utility_people_affected is None:
-        utility_people_affected = 0
+    if utility_people_affected == "":
+        utility_people_affected = "NULL"
 
     sql_script = """
         INSERT INTO disaster_db.disaster_db_schema.disaster_dimension(disaster_type, disaster_subgroup, disaster_group, disaster_category, magnitude, utility_people_affected)
         VALUES (
-          %s, %s, %s, %s, %i, %i
+          %s, %s, %s, %s, %s, %s
         );
     """ % (disaster_type, disaster_subgroup, disaster_group, disaster_category, magnitude, utility_people_affected)
 
@@ -254,38 +254,40 @@ def populate_cost_dimension(csv_row):
     insurance_payments = csv_row[INSURANCE_PAYMENTS_INDEX]
     ngo_cost = csv_row[NGO_PAYMENTS_INDEX]
 
-    if estimated_total_cost is None:
-        estimated_total_cost = 0
+    if estimated_total_cost == "":
+        estimated_total_cost = "NULL"
 
-    if normalized_total_cost is None:
-        normalized_total_cost = 0
+    if normalized_total_cost == "":
+        normalized_total_cost = "NULL"
 
-    if federal_payments is None:
-        federal_payments = 0
+    if federal_payments == "":
+        federal_payments = "NULL"
 
-    if provincial_dfaa_payments is None:
-        provincial_dfaa_payments = 0
+    if provincial_dfaa_payments == "":
+        provincial_dfaa_payments = "NULL"
 
-    if provincial_department_payments is None:
-        provincial_department_payments = 0
+    if provincial_department_payments == "":
+        provincial_department_payments = "NULL"
 
-    if municipal_cost is None:
-        municipal_cost = 0
+    if municipal_cost == "":
+        municipal_cost = "NULL"
 
-    if ogd_cost is None:
-        ogd_cost = 0
+    if ogd_cost == "":
+        ogd_cost = "NULL"
 
-    if insurance_payments is None:
-        insurance_payments = 0
+    if insurance_payments == "":
+        insurance_payments = "NULL"
 
-    if ngo_cost is None:
-        ngo_cost = 0
+    if ngo_cost == "":
+        ngo_cost = "NULL"
+
+
 
     sql_script = """
         INSERT INTO disaster_db.disaster_db_schema.cost_dimension(estimated_total_cost, normalized_total_cost, federal_dfaa_payments, 
             provincial_dfaa_payments, provincial_department_payments, municipal_cost, ogd_cost, insurance_payments, ngo_cost)
         VALUES (
-          %i, %i, %i, %i, %i, %i, %i, %i, %i
+          %s, %s, %s, %s, %s, %s, %s, %s, %s
         );
     """ % (estimated_total_cost, normalized_total_cost, federal_payments, provincial_dfaa_payments, provincial_department_payments,
             municipal_cost, ogd_cost, insurance_payments, ngo_cost)
