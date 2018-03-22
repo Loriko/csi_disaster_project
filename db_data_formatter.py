@@ -196,8 +196,126 @@ def populate_summary_dimension_row(csv_row):
     """ % (comment, keyword1, keyword2, keyword3)
 
 
+def populate_disaster_dimension(csv_row):
+    disaster_type = csv_row[EVENT_TYPE_INDEX]
+    disaster_subgroup = csv_row[EVENT_SUBGROUP_INDEX]
+    disaster_group = csv_row[EVENT_GROUP_INDEX]
+    disaster_category = csv_row[EVENT_CATEGORY_INDEX]
+    magnitude = csv_row[MAGNITUDE_INDEX]
+    utility_people_affected = csv_row[UTILITY_PEOPLE_AFFECTED_INDEX]
+
+    if magnitude is None:
+        magnitude = 0
+    
+    if utility_people_affected is None:
+        utility_people_affected = 0
+
+    sql_script = """
+        INSERT INTO disaster_db.disaster_db_schema.disaster_dimension(disaster_type, disaster_subgroup, disaster_group, disaster_category, magnitude, utility_people_affected)
+        VALUES (
+          %s, %s, %s, %s, %i, %i
+        );
+    """ % (disaster_type, disaster_subgroup, disaster_group, disaster_category, magnitude, utility_people_affected)
+
+    execute_query(sql_script)
+
+def create_disaster_dimension():
+    # Create empty disaster table
+    create_summary_dimension_query = """
+        DROP TABLE IF EXISTS fact;
+        DROP TABLE IF EXISTS disaster_db.disaster_db_schema.disaster_dimension;
+        
+        CREATE TABLE disaster_db.disaster_db_schema.disaster_dimension
+        (
+          disaster_key              SERIAL,
+          disaster_type             VARCHAR(30),
+          disaster_subgroup         VARCHAR(30),
+          disaster_group            VARCHAR(30),
+          disaster_category         VARCHAR(30),
+          magnitude                 DECIMAL(18, 1),
+          utility_people_affected   INT,
+          PRIMARY KEY (disaster_key)
+        );
+    """
+    execute_query(create_summary_dimension_query)
+
+
+def populate_cost_dimension(csv_row):
+    estimated_total_cost = csv_row[ESTIMATED_TOTAL_COST_INDEX]
+    normalized_total_cost = csv_row[NORMALIZED_TOTAL_COST_INDEX]
+    federal_payments = csv_row[FEDERAL_DFAA_PAYMENTS_INDEX]
+    provincial_dfaa_payments = csv_row[PROVINCIAL_DFAA_PAYMENTS]
+    provincial_department_payments = csv_row[PROVINCIAL_DEPARTMENT_PAYMENTS_INDEX]
+    municipal_cost = csv_row[MUNICIPAL_COSTS_INDEX]
+    ogd_cost = csv_row[OGD_COSTS_INDEX]
+    insurance_payments = csv_row[INSURANCE_PAYMENTS_INDEX]
+    ngo_cost = csv_row[NGO_PAYMENTS_INDEX]
+
+    if estimated_total_cost is None:
+        estimated_total_cost = 0
+
+    if normalized_total_cost is None:
+        normalized_total_cost = 0
+
+    if federal_payments is None:
+        federal_payments = 0
+
+    if provincial_dfaa_payments is None:
+        provincial_dfaa_payments = 0
+
+    if provincial_department_payments is None:
+        provincial_department_payments = 0
+
+    if municipal_cost is None:
+        municipal_cost = 0
+
+    if ogd_cost is None:
+        ogd_cost = 0
+
+    if insurance_payments is None:
+        insurance_payments = 0
+
+    if ngo_cost is None:
+        ngo_cost = 0
+
+    sql_script = """
+        INSERT INTO disaster_db.disaster_db_schema.cost_dimension(estimated_total_cost, normalized_total_cost, federal_dfaa_payments, 
+            provincial_dfaa_payments, provincial_department_payments, municipal_cost, ogd_cost, insurance_payments, ngo_cost)
+        VALUES (
+          %i, %i, %i, %i, %i, %i, %i, %i, %i
+        );
+    """ % (estimated_total_cost, normalized_total_cost, federal_payments, provincial_dfaa_payments, provincial_department_payments,
+            municipal_cost, ogd_cost, insurance_payments, ngo_cost)
+
+
+def create_cost_dimension():
+    # Create empty cost table
+    create_cost_dimension_query = """
+        DROP TABLE IF EXISTS fact;
+        DROP TABLE IF EXISTS disaster_db.disaster_db_schema.cost_dimension;
+        
+        CREATE TABLE disaster_db.disaster_db_schema.cost_dimension
+        (
+          cost_key                          SERIAL,
+          estimated_total_cost              INT,
+          normalized_total_cost             INT,
+          federal_dfaa_payments             INT,
+          provincial_dfaa_payments          INT,
+          provincial_department_payments    INT,
+          municipal_cost                    INT,
+          ogd_cost                          INT,
+          insurance_payments                INT,
+          ngo_cost                          INT,
+          PRIMARY KEY (cost_key)
+        );
+    """
+    execute_query(create_cost_dimension_query)
+
+
 def create_data_mart():
     log("Starting creation of data mart")
     # Start calling create_populate methods here
     create_populate_date_dimension()
     create_summary_dimension()
+    create_disaster_dimension()
+    create_cost_dimension()
