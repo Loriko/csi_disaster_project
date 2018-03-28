@@ -1,3 +1,4 @@
+# coding=utf-8
 import csv
 import psycopg2
 import psycopg2.extras
@@ -8,12 +9,14 @@ from datetime import date
 import holidays
 import traceback
 
-LOGGING_TURNED_ON = True
+LOGGING_TURNED_ON = False
 CONNECTION_STRING = "host='localhost' dbname='disaster_db' user='postgres' password='password'"
 NORTH_AMERICAN_HOLIDAYS = holidays.UnitedStates() + holidays.Canada() + holidays.Mexico()
 CSV_FILE_LOCATION = "canadian_disaster_database_source_data.csv"
 OLD_LOCATION_FILE_LOCATION = "place_column.csv"
 LOCATION_FILE_LOCATION = "location_data.csv"
+CITY_PROVINCE_FILE_LOCATION = "city_province_data.csv"
+PROBLEMATIC_PLACES_FILE_LOCATION = "problematic_places.csv"
 CONNECTION = psycopg2.connect(CONNECTION_STRING)
 
 # labeling the indexes of the columns of the source disaster csv file
@@ -40,6 +43,51 @@ NGO_PAYMENTS_INDEX = 19
 UTILITY_PEOPLE_AFFECTED_INDEX = 20
 MAGNITUDE_INDEX = 21
 
+# Quebec is used as the biggest city for quebec even though it isn't the biggest city because sometimes
+# only "Quebec" is specified for the place and there is ambiguity to whether it denotes the city or the province
+MAIN_CITY_FOR_PROVINCES = {
+    "QC": "quebec",
+    "ON": "toronto",
+    "NL": "st. johns",
+    "PE": "charlottetown",
+    "NS": "halifax",
+    "NB": "moncton",
+    "MB": "winnipeg",
+    "SK": "saskatoon",
+    "AB": "calgary",
+    "BC": "vancouver",
+    "YT": "whitehorse",
+    "NT": "yellowknife",
+    "NU": "iqaluit"
+}
+TO_PROVINCE_CODE_CONVERSION_MAP = {
+    "newfoundland and labrador": "NL",
+    "prince edward island": "PE",
+    "nova scotia": "NS",
+    "new brunswick": "NB",
+    "quebec": "QC",
+    "ontario": "ON",
+    "manitoba": "MB",
+    "saskatchewan": "SK",
+    "alberta": "AB",
+    "british columbia": "BC",
+    "yukon": "YT",
+    "northwest territories": "NT",
+    "nunavut": "NU",
+    " nl": "NL",
+    " pe": "PE",
+    " ns": "NS",
+    " nb": "NB",
+    " qc": "QC",
+    " on": "ON",
+    " mb": "MB",
+    " sk": "SK",
+    " ab": "AB",
+    " bc": "BC",
+    " yt": "YT",
+    " nt": "NT",
+    " nu": "NU"
+}
 
 # enum containing the color codes for coloring the console output
 class bcolors:
@@ -94,8 +142,6 @@ def execute_query(query):
     finally:
         cursor.close()
         CONNECTION.commit()
-        CONNECTION.close()
-        log('Connection closed')
         return results
 
 
@@ -281,8 +327,6 @@ def populate_cost_dimension(csv_row):
     if ngo_cost == "":
         ngo_cost = "NULL"
 
-
-
     sql_script = """
         INSERT INTO disaster_db.disaster_db_schema.cost_dimension(estimated_total_cost, normalized_total_cost, federal_dfaa_payments, 
             provincial_dfaa_payments, provincial_department_payments, municipal_cost, ogd_cost, insurance_payments, ngo_cost)
@@ -317,28 +361,132 @@ def create_cost_dimension():
     execute_query(create_cost_dimension_query)
 
 
-def create_location_dimension():
+# Returns a map that maps every valid place string to its id in the database
+# Only populates rows for canadian locations. Non canadian locations will have to be created some other way
+def create_populate_location_dimension():
+    # Create empty location table
+    create_location_dimension_query = """
+        DROP TABLE IF EXISTS fact;
+        DROP TABLE IF EXISTS disaster_db.disaster_db_schema.location_dimension;
+        
+        CREATE TABLE disaster_db.disaster_db_schema.location_dimension
+        (
+            location_key    SERIAL,
+            city            VARCHAR(190),
+            province        VARCHAR(50),
+            country         VARCHAR(30),
+            canada          BOOLEAN,
+            PRIMARY KEY (location_key)
+        );
+    """
+    execute_query(create_location_dimension_query)
+    # Populate location_dimension
+    city_province_tuple_to_id_map = {}
     with open(CSV_FILE_LOCATION, "rb") as csv_file:
         csv_reader = csv.reader(csv_file)
-        for csv_row in csv_reader:
-            # do something
-            place = csv_row[PLACE_INDEX]
-            raise NotImplementedError()
+        with open(PROBLEMATIC_PLACES_FILE_LOCATION, "wb") as problematic_rows_file:
+            problematic_csv_writer = csv.writer(problematic_rows_file)
+            for csv_row in csv_reader:
+                place = csv_row[PLACE_INDEX]
+                city_province_tuple = get_city_province_tuple_for_place(place)
+                if city_province_tuple not in city_province_tuple_to_id_map and city_province_tuple is not None:
+                    location_key = execute_query("""
+                        INSERT INTO disaster_db.disaster_db_schema.location_dimension(city, province, country, canada)
+                        VALUES ('%s', '%s', 'CANADA', TRUE);
+                        SELECT location_key
+                        FROM disaster_db.disaster_db_schema.location_dimension
+                        WHERE city = '%s' AND province = '%s';
+                    """ % (city_province_tuple[0], city_province_tuple[1], city_province_tuple[0], city_province_tuple[1],))
+                    city_province_tuple_to_id_map[city_province_tuple] = location_key
+                elif city_province_tuple is None:
+                    problematic_csv_writer.writerow(csv_row)
+                    continue
+    print_success("Location dimension created")
+    return city_province_tuple_to_id_map
 
 
-def select_distinct_locations_into_new_csv():
-    with open(OLD_LOCATION_FILE_LOCATION, "rb") as csv_file:
-        csv_reader = csv.reader(csv_file)
-        with open("new_" + LOCATION_FILE_LOCATION, "wb") as new_csv_file:
-            csv_writer = csv.writer(new_csv_file)
-            distinct_locations = []
-            for old_row in csv_reader:
-                # OLD_LOCATION_FILE only has one column containing the location
-                if old_row[0] not in distinct_locations:
-                    distinct_locations.append(old_row[0])
-            for new_row in distinct_locations:
-                csv_writer.writerow((new_row,))
-    print_success("Created new location file only containing distinct locations")
+# def create_distinct_locations_csv():
+#     with open(OLD_LOCATION_FILE_LOCATION, "rb") as csv_file:
+#         csv_reader = csv.reader(csv_file)
+#         with open(LOCATION_FILE_LOCATION, "wb") as new_csv_file:
+#             csv_writer = csv.writer(new_csv_file)
+#             distinct_locations = []
+#             for old_row in csv_reader:
+#                 # OLD_LOCATION_FILE only has one column containing the location
+#                 if old_row[0] not in distinct_locations:
+#                     distinct_locations.append(old_row[0])
+#             for new_row in distinct_locations:
+#                 csv_writer.writerow((new_row,))
+#     print_success("Created new location file only containing distinct locations")
+
+
+# def create_city_province_csv():
+#     with open(LOCATION_FILE_LOCATION, "rb") as csv_file:
+#         csv_reader = csv.reader(csv_file)
+#         with open(CITY_PROVINCE_FILE_LOCATION, "wb") as new_csv_file:
+#             csv_writer = csv.writer(new_csv_file)
+#             with open(PROBLEMATIC_PLACES_FILE_LOCATION, "wb") as problematic_rows_file:
+#                 problematic_csv_writer = csv.writer(problematic_rows_file)
+#                 distinct_locations = []
+#                 possible_province_labels = TO_PROVINCE_CODE_CONVERSION_MAP.keys()
+#                 for row in csv_reader:
+#                     province = None
+#                     city = None
+#                     for label in possible_province_labels:
+#                         province_string_index = row[0].lower().rfind(label)
+#                         if province_string_index >= 0:
+#                             province = TO_PROVINCE_CODE_CONVERSION_MAP[label]
+#                             city = row[0][:province_string_index].strip()
+#                             if (city, province,) not in distinct_locations:
+#                                 distinct_locations.append((city, province,))
+#                             break
+#                     if province is None or city is None:
+#                         # Store the row that doesn't fit in model in another csv file so we can look at it manually
+#                         problematic_csv_writer.writerow(row)
+#                         continue
+#                 for new_row in distinct_locations:
+#                     csv_writer.writerow(new_row)
+#
+#     print_success("Created new location file only containing distinct locations")
+
+
+def get_city_province_tuple_for_place(place):
+    # Remove all non utf8 characters
+    place = place.decode('utf-8','ignore').encode("utf-8")
+    # Put everything to lowercase
+    place = place.lower()
+    # Remove all commas
+    place = place.replace(",", "")
+    # Remove all "
+    place = place.replace("\"", "")
+    # Remove all single quotes
+    place = place.replace("'", "")
+    # Remove all \
+    place = place.replace("\\", "")
+    # Remove city (leading with a space)
+    place = place.replace(" city", "")
+    # Remove city (not leading with a space)
+    place = place.replace("city", "")
+    possible_province_labels = TO_PROVINCE_CODE_CONVERSION_MAP.keys()
+    province = None
+    city = None
+    for label in possible_province_labels:
+        province_string_index = place.lower().rfind(label)
+        if province_string_index >= 0:
+            province = TO_PROVINCE_CODE_CONVERSION_MAP[label]
+            city = place[:province_string_index].strip()
+            if len(city) > 60:
+                city = city[:58] + ".."
+    if city is None or province is None:
+        return None
+    else:
+        if city is None or city == "":
+            city = MAIN_CITY_FOR_PROVINCES[province]
+        return city, province,
+
+
+def create_populate_fact_table(city_province_tuple_to_id_map):
+    pass
 
 
 def create_data_mart():
@@ -348,7 +496,10 @@ def create_data_mart():
     create_summary_dimension()
     create_disaster_dimension()
     create_cost_dimension()
-    create_location_dimension()
+    city_province_tuple_to_id_map = create_populate_location_dimension()
+    create_populate_fact_table(city_province_tuple_to_id_map)
 
 
-select_distinct_locations_into_new_csv()
+# Connection must be closed after everything is said and done, do add or remove anything past this point
+CONNECTION.close()
+log('Connection closed')
