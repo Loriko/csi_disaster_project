@@ -1,6 +1,6 @@
 -- Found at https://medium.com/@duffn/creating-a-date-dimension-table-in-postgresql-af3f8e2941ac
 -- Some modifications were made to add meteorological_season, is_holiday and holiday_text
-DROP TABLE IF EXISTS fact;
+DROP TABLE IF EXISTS disaster_db.disaster_db_schema.fact;
 DROP TABLE if exists disaster_db.disaster_db_schema.date_dimension;
 
 CREATE TABLE disaster_db.disaster_db_schema.date_dimension
@@ -96,7 +96,7 @@ INSERT INTO disaster_db.disaster_db_schema.date_dimension
 
 
   FROM (SELECT '1900-01-01'::DATE+ SEQUENCE.DAY AS datum
-        FROM GENERATE_SERIES (0,29219) AS SEQUENCE (DAY)
+        FROM GENERATE_SERIES (0,43000) AS SEQUENCE (DAY)
         GROUP BY SEQUENCE.DAY) DQ
   ORDER BY 1;
 

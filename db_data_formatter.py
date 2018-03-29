@@ -4,7 +4,6 @@ import psycopg2
 import psycopg2.extras
 import sys
 import json
-import pprint
 from datetime import date
 import holidays
 import traceback
@@ -13,9 +12,7 @@ LOGGING_TURNED_ON = False
 CONNECTION_STRING = "host='localhost' dbname='disaster_db' user='postgres' password='password'"
 NORTH_AMERICAN_HOLIDAYS = holidays.UnitedStates() + holidays.Canada() + holidays.Mexico()
 CSV_FILE_LOCATION = "canadian_disaster_database_source_data.csv"
-OLD_LOCATION_FILE_LOCATION = "place_column.csv"
-LOCATION_FILE_LOCATION = "location_data.csv"
-CITY_PROVINCE_FILE_LOCATION = "city_province_data.csv"
+PROBLEMATIC_ROW_FILE_LOCATION = "problematic_rows.csv"
 PROBLEMATIC_PLACES_FILE_LOCATION = "problematic_places.csv"
 CONNECTION = psycopg2.connect(CONNECTION_STRING)
 
@@ -88,6 +85,28 @@ TO_PROVINCE_CODE_CONVERSION_MAP = {
     " nt": "NT",
     " nu": "NU"
 }
+SUMMARY_KEYWORD_LIST = [
+    "explosion",
+    "entombed",
+    "killed",
+    "severe",
+    "large",
+    "dead",
+    "homeless",
+    "injured",
+    "collision",
+    "avalanche",
+    "blew",
+    "blizzard",
+    "acid",
+    "drought",
+    "thunderstorm",
+    "heavy",
+    "failure",
+    "evacuation",
+    "derailed",
+    "arson"
+]
 
 # enum containing the color codes for coloring the console output
 class bcolors:
@@ -134,7 +153,7 @@ def execute_query(query):
     results = []
     try:
         cursor.execute(query)
-        if "SELECT" in cursor.statusmessage and "INTO" not in cursor.statusmessage:
+        if ("SELECT" in query and "INTO" not in query) or "RETURNING" in query:
             results = cursor.fetchall()
         log("Query successful")
     except:
@@ -152,6 +171,7 @@ def execute_scripts_from_file(filename):
     fd.close()
     # all SQL commands (split on ';')
     sqlCommands = sqlFile.split(";")
+    sqlCommands.remove("")
     # Execute every command from the input file
     for command in sqlCommands:
         # This will skip and report errors
@@ -169,7 +189,7 @@ def populate_date_dimension_holidays(holidays_list):
     get_date_dimension_rows_query = """
         SELECT  date_key,
                 date_actual
-        FROM    public.date_dimension;
+        FROM    disaster_db.disaster_db_schema.date_dimension;
     """
     holiday_dates_list = []
     results = execute_query(get_date_dimension_rows_query)
@@ -179,15 +199,21 @@ def populate_date_dimension_holidays(holidays_list):
         holiday_text = holidays_list.get(row[1])
         if is_holiday:
             holiday_text = holiday_text.replace("'", "''")
+            if len(holiday_text) > 50:
+                holiday_text = holiday_text[:48] + ".."
             holiday_dates_list.append(date_dimension_id)
             update_query = """
-                UPDATE  public.date_dimension
+                UPDATE  disaster_db.disaster_db_schema.date_dimension
                 SET     is_holiday = TRUE,
                         holiday_text = '%s'
-                WHERE   posted_date_key = '%s';
+                WHERE   date_key = '%s';
             """ % (holiday_text, date_dimension_id)
-            execute_query(update_query)
-    print_success('Updated %d dates out of %d' % (len(holiday_dates_list), len(results)))
+            try:
+                execute_query(update_query)
+            except:
+                print_stack_trace()
+                continue
+    print_success('Updated %d dates with holidays out of %d' % (len(holiday_dates_list), len(results)))
 
 
 def create_populate_date_dimension():
@@ -195,18 +221,24 @@ def create_populate_date_dimension():
     execute_scripts_from_file("sql_scripts/create_date_dimension.sql")
     # Fill holidays using canadian holiday data
     populate_date_dimension_holidays(NORTH_AMERICAN_HOLIDAYS)
+    print_success("Date dimension created and populated")
+
+
+def create_populate_summary_dimension():
+    create_summary_dimension()
+    return populate_summary_dimension()
 
 
 def create_summary_dimension():
     # Create empty summary table
     create_summary_dimension_query = """
-        DROP TABLE IF EXISTS fact;
+        DROP TABLE IF EXISTS disaster_db.disaster_db_schema.fact;
         DROP TABLE IF EXISTS disaster_db.disaster_db_schema.summary_dimension;
         
         CREATE TABLE disaster_db.disaster_db_schema.summary_dimension
         (
           summary_key   SERIAL,
-          summary       VARCHAR(300),
+          summary       TEXT,
           keyword_1     VARCHAR(20),
           keyword_2     VARCHAR(20),
           keyword_3     VARCHAR(20),
@@ -214,17 +246,44 @@ def create_summary_dimension():
         );
     """
     execute_query(create_summary_dimension_query)
+    print_success("Summary dimension created")
 
 
-def populate_summary_dimension_row(csv_row):
-    comment = csv_row[COMMENT_INDEX]
+def populate_summary_dimension():
+    summary_tuple_to_id_map = {}
+    new_rows_count = 0
+    with open(CSV_FILE_LOCATION, "rb") as csv_file:
+        csv_reader = csv.reader(csv_file)
+        # Skip the header
+        next(csv_reader, None)
+        for row in csv_reader:
+            summary_tuple = get_summary_tuple_for_comment(row)
+            if summary_tuple not in summary_tuple_to_id_map:
+                sql_script = """
+                    INSERT INTO disaster_db.disaster_db_schema.summary_dimension(summary, keyword_1, keyword_2, keyword_3)
+                    VALUES (
+                      %s, %s, %s, %s
+                    )
+                    RETURNING summary_key;
+                """ % summary_tuple
+                summary_key = execute_query(sql_script)
+                summary_tuple_to_id_map[summary_tuple] = summary_key[0][0]
+                new_rows_count += 1
+        print_success("Populated summary dimension with %d rows" % new_rows_count)
+    return summary_tuple_to_id_map
+
+
+def get_summary_tuple_for_comment(row):
+    comment = row[COMMENT_INDEX]
+    comment = comment.decode('utf-8','ignore').encode("utf-8")
+    # escape all single quotes
+    comment = comment.replace("'", "''")
     if comment == "" or comment is None:
         comment = "NULL"
     else:
         comment = "'" + comment + "'"
     matching_keywords_list = []
-    keyword_list = json.load(open("summary_keyword_list.json"))
-    for keyword in keyword_list:
+    for keyword in SUMMARY_KEYWORD_LIST:
         if keyword in comment:
             matching_keywords_list.append(keyword)
     keyword1 = "NULL"
@@ -236,60 +295,128 @@ def populate_summary_dimension_row(csv_row):
             keyword2 = "'" + matching_keywords_list[1] + "'"
             if len(matching_keywords_list) >= 3:
                 keyword3 = "'" + matching_keywords_list[2] + "'"
-    sql_script = """
-        INSERT INTO disaster_db.disaster_db_schema.summary_dimension(summary, keyword_1, keyword_2, keyword_3)
-        VALUES (
-          %s, %s, %s, %s
-        );
-    """ % (comment, keyword1, keyword2, keyword3)
+    return comment, keyword1, keyword2, keyword3,
+
+def populate_disaster_dimension():
+    disaster_tuple_to_id_map = {}
+    with open(CSV_FILE_LOCATION, "rb") as csv_file:
+        csv_reader = csv.reader(csv_file)
+        # Skip header row
+        next(csv_reader, None)
+        for csv_row in csv_reader:
+            disaster_tuple = get_disaster_tuple(csv_row)
+            if disaster_tuple is not None and disaster_tuple not in disaster_tuple_to_id_map:
+                sql_script = """
+                    INSERT INTO disaster_db.disaster_db_schema.disaster_dimension(disaster_type, disaster_subgroup, disaster_group, disaster_category, magnitude, utility_people_affected)
+                    VALUES (
+                      %s, %s, %s, %s, %s, %s
+                    )
+                    RETURNING disaster_key;
+                """ % disaster_tuple
+                disaster_key = execute_query(sql_script)[0][0]
+                disaster_tuple_to_id_map[disaster_tuple] = disaster_key
+        print_success("Successfully populated disaster dimension")
+    return disaster_tuple_to_id_map
 
 
-def populate_disaster_dimension(csv_row):
+def get_disaster_tuple(csv_row):
     disaster_type = csv_row[EVENT_TYPE_INDEX]
     disaster_subgroup = csv_row[EVENT_SUBGROUP_INDEX]
     disaster_group = csv_row[EVENT_GROUP_INDEX]
     disaster_category = csv_row[EVENT_CATEGORY_INDEX]
     magnitude = csv_row[MAGNITUDE_INDEX]
     utility_people_affected = csv_row[UTILITY_PEOPLE_AFFECTED_INDEX]
+    # We have checked in our data and disaster_category should have a length of 8 maximum.
+    # Every row for which disaster_category has a length more than 10 is actually invalid so we can just ignore it
+    if len(disaster_category) > 10:
+        return None
+    # Our csv file is encoded in latin-1 but our database only accepts utf-8 characters
+    disaster_type = disaster_type.decode('utf-8','ignore').encode("utf-8")
+    disaster_category = disaster_category.decode('utf-8','ignore').encode("utf-8")
+    disaster_group = disaster_group.decode('utf-8','ignore').encode("utf-8")
+    disaster_subgroup = disaster_subgroup.decode('utf-8','ignore').encode("utf-8")
+    magnitude = magnitude.decode('utf-8','ignore').encode("utf-8")
+    utility_people_affected = utility_people_affected.decode('utf-8','ignore').encode("utf-8")
 
-    if magnitude == "":
+    if disaster_type == "":
+        disaster_type = "NULL"
+    else:
+        disaster_type = "'" + disaster_type.lower().replace("'", "") + "'"
+    if disaster_subgroup == "":
+        disaster_subgroup = "NULL"
+    else:
+        disaster_subgroup = "'" + disaster_subgroup.lower().replace("'", "") + "'"
+    if disaster_group == "":
+        disaster_group = "NULL"
+    else:
+        disaster_group = "'" + disaster_group.lower().replace("'", "") + "'"
+    if disaster_category == "":
+        disaster_category = "NULL"
+    else:
+        disaster_category = "'" + disaster_category.lower().replace("'", "") + "'"
+    # Only earthquakes and tsunamis (denoted by the geological disaster_category subgroup)
+    if magnitude == "" or disaster_subgroup.lower() != "'geological'":
         magnitude = "NULL"
-    
+    else:
+        magnitude = "'" + magnitude.lower().replace("'", "") + "'"
     if utility_people_affected == "":
         utility_people_affected = "NULL"
+    else:
+        utility_people_affected = "'" + utility_people_affected.lower().replace("'", "") + "'"
+    return disaster_type, disaster_subgroup, disaster_group, disaster_category, magnitude, utility_people_affected,
 
-    sql_script = """
-        INSERT INTO disaster_db.disaster_db_schema.disaster_dimension(disaster_type, disaster_subgroup, disaster_group, disaster_category, magnitude, utility_people_affected)
-        VALUES (
-          %s, %s, %s, %s, %s, %s
-        );
-    """ % (disaster_type, disaster_subgroup, disaster_group, disaster_category, magnitude, utility_people_affected)
 
-    execute_query(sql_script)
+def create_populate_disaster_dimension():
+    create_disaster_dimension()
+    return populate_disaster_dimension()
 
 
 def create_disaster_dimension():
     # Create empty disaster table
-    create_summary_dimension_query = """
-        DROP TABLE IF EXISTS fact;
+    create_disaster_dimension_query = """
+        DROP TABLE IF EXISTS disaster_db.disaster_db_schema.fact;
         DROP TABLE IF EXISTS disaster_db.disaster_db_schema.disaster_dimension;
         
         CREATE TABLE disaster_db.disaster_db_schema.disaster_dimension
         (
           disaster_key              SERIAL,
-          disaster_type             VARCHAR(30),
+          disaster_type             VARCHAR(40),
           disaster_subgroup         VARCHAR(30),
-          disaster_group            VARCHAR(30),
-          disaster_category         VARCHAR(30),
+          disaster_group            VARCHAR(15),
+          disaster_category         VARCHAR(10),
           magnitude                 DECIMAL(18, 1),
           utility_people_affected   INT,
           PRIMARY KEY (disaster_key)
         );
     """
-    execute_query(create_summary_dimension_query)
+    execute_query(create_disaster_dimension_query)
 
 
-def populate_cost_dimension(csv_row):
+def populate_cost_dimension():
+    cost_tuple_to_id_map = {}
+    with open(CSV_FILE_LOCATION, "rb") as csv_file:
+        csv_reader = csv.reader(csv_file)
+        # Skip header row
+        next(csv_reader, None)
+        for csv_row in csv_reader:
+            # Get tuple for the row. Method does some data cleaning at the same time
+            cost_tuple = get_cost_tuple(csv_row)
+            if cost_tuple not in cost_tuple_to_id_map:
+                sql_script = """
+                    INSERT INTO disaster_db.disaster_db_schema.cost_dimension(estimated_total_cost, normalized_total_cost, federal_dfaa_payments, 
+                        provincial_dfaa_payments, provincial_department_payments, municipal_cost, ogd_cost, insurance_payments, ngo_cost)
+                    VALUES (
+                      %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    RETURNING cost_key;
+                """ % cost_tuple
+                cost_key = execute_query(sql_script)
+                cost_tuple_to_id_map[cost_tuple] = cost_key[0][0]
+        print_success("Successfully populated cost dimension")
+    return cost_tuple_to_id_map
+
+
+def get_cost_tuple(csv_row):
     estimated_total_cost = csv_row[ESTIMATED_TOTAL_COST_INDEX]
     normalized_total_cost = csv_row[NORMALIZED_TOTAL_COST_INDEX]
     federal_payments = csv_row[FEDERAL_DFAA_PAYMENTS_INDEX]
@@ -299,62 +426,52 @@ def populate_cost_dimension(csv_row):
     ogd_cost = csv_row[OGD_COSTS_INDEX]
     insurance_payments = csv_row[INSURANCE_PAYMENTS_INDEX]
     ngo_cost = csv_row[NGO_PAYMENTS_INDEX]
-
+    # Some cleaning for insertion in the db
     if estimated_total_cost == "":
         estimated_total_cost = "NULL"
-
     if normalized_total_cost == "":
         normalized_total_cost = "NULL"
-
     if federal_payments == "":
         federal_payments = "NULL"
-
     if provincial_dfaa_payments == "":
         provincial_dfaa_payments = "NULL"
-
     if provincial_department_payments == "":
         provincial_department_payments = "NULL"
-
     if municipal_cost == "":
         municipal_cost = "NULL"
-
     if ogd_cost == "":
         ogd_cost = "NULL"
-
     if insurance_payments == "":
         insurance_payments = "NULL"
-
     if ngo_cost == "":
         ngo_cost = "NULL"
+    return (estimated_total_cost, normalized_total_cost, federal_payments, provincial_dfaa_payments,
+            provincial_department_payments, municipal_cost, ogd_cost, insurance_payments, ngo_cost,)
 
-    sql_script = """
-        INSERT INTO disaster_db.disaster_db_schema.cost_dimension(estimated_total_cost, normalized_total_cost, federal_dfaa_payments, 
-            provincial_dfaa_payments, provincial_department_payments, municipal_cost, ogd_cost, insurance_payments, ngo_cost)
-        VALUES (
-          %s, %s, %s, %s, %s, %s, %s, %s, %s
-        );
-    """ % (estimated_total_cost, normalized_total_cost, federal_payments, provincial_dfaa_payments, provincial_department_payments,
-            municipal_cost, ogd_cost, insurance_payments, ngo_cost)
+
+def create_populate_cost_dimension():
+    create_cost_dimension()
+    return populate_cost_dimension()
 
 
 def create_cost_dimension():
     # Create empty cost table
     create_cost_dimension_query = """
-        DROP TABLE IF EXISTS fact;
+        DROP TABLE IF EXISTS disaster_db.disaster_db_schema.fact;
         DROP TABLE IF EXISTS disaster_db.disaster_db_schema.cost_dimension;
         
         CREATE TABLE disaster_db.disaster_db_schema.cost_dimension
         (
           cost_key                          SERIAL,
-          estimated_total_cost              INT,
-          normalized_total_cost             INT,
-          federal_dfaa_payments             INT,
-          provincial_dfaa_payments          INT,
-          provincial_department_payments    INT,
-          municipal_cost                    INT,
-          ogd_cost                          INT,
-          insurance_payments                INT,
-          ngo_cost                          INT,
+          estimated_total_cost              BIGINT,
+          normalized_total_cost             BIGINT,
+          federal_dfaa_payments             BIGINT,
+          provincial_dfaa_payments          BIGINT,
+          provincial_department_payments    BIGINT,
+          municipal_cost                    BIGINT,
+          ogd_cost                          BIGINT,
+          insurance_payments                BIGINT,
+          ngo_cost                          BIGINT,
           PRIMARY KEY (cost_key)
         );
     """
@@ -366,7 +483,7 @@ def create_cost_dimension():
 def create_populate_location_dimension():
     # Create empty location table
     create_location_dimension_query = """
-        DROP TABLE IF EXISTS fact;
+        DROP TABLE IF EXISTS disaster_db.disaster_db_schema.fact;
         DROP TABLE IF EXISTS disaster_db.disaster_db_schema.location_dimension;
         
         CREATE TABLE disaster_db.disaster_db_schema.location_dimension
@@ -387,17 +504,14 @@ def create_populate_location_dimension():
         with open(PROBLEMATIC_PLACES_FILE_LOCATION, "wb") as problematic_rows_file:
             problematic_csv_writer = csv.writer(problematic_rows_file)
             for csv_row in csv_reader:
-                place = csv_row[PLACE_INDEX]
-                city_province_tuple = get_city_province_tuple_for_place(place)
+                city_province_tuple = get_city_province_tuple_for_place(csv_row)
                 if city_province_tuple not in city_province_tuple_to_id_map and city_province_tuple is not None:
                     location_key = execute_query("""
                         INSERT INTO disaster_db.disaster_db_schema.location_dimension(city, province, country, canada)
-                        VALUES ('%s', '%s', 'CANADA', TRUE);
-                        SELECT location_key
-                        FROM disaster_db.disaster_db_schema.location_dimension
-                        WHERE city = '%s' AND province = '%s';
-                    """ % (city_province_tuple[0], city_province_tuple[1], city_province_tuple[0], city_province_tuple[1],))
-                    city_province_tuple_to_id_map[city_province_tuple] = location_key
+                        VALUES ('%s', '%s', 'CANADA', TRUE)
+                        RETURNING location_key;
+                    """ % city_province_tuple)
+                    city_province_tuple_to_id_map[city_province_tuple] = location_key[0][0]
                 elif city_province_tuple is None:
                     problematic_csv_writer.writerow(csv_row)
                     continue
@@ -405,52 +519,8 @@ def create_populate_location_dimension():
     return city_province_tuple_to_id_map
 
 
-# def create_distinct_locations_csv():
-#     with open(OLD_LOCATION_FILE_LOCATION, "rb") as csv_file:
-#         csv_reader = csv.reader(csv_file)
-#         with open(LOCATION_FILE_LOCATION, "wb") as new_csv_file:
-#             csv_writer = csv.writer(new_csv_file)
-#             distinct_locations = []
-#             for old_row in csv_reader:
-#                 # OLD_LOCATION_FILE only has one column containing the location
-#                 if old_row[0] not in distinct_locations:
-#                     distinct_locations.append(old_row[0])
-#             for new_row in distinct_locations:
-#                 csv_writer.writerow((new_row,))
-#     print_success("Created new location file only containing distinct locations")
-
-
-# def create_city_province_csv():
-#     with open(LOCATION_FILE_LOCATION, "rb") as csv_file:
-#         csv_reader = csv.reader(csv_file)
-#         with open(CITY_PROVINCE_FILE_LOCATION, "wb") as new_csv_file:
-#             csv_writer = csv.writer(new_csv_file)
-#             with open(PROBLEMATIC_PLACES_FILE_LOCATION, "wb") as problematic_rows_file:
-#                 problematic_csv_writer = csv.writer(problematic_rows_file)
-#                 distinct_locations = []
-#                 possible_province_labels = TO_PROVINCE_CODE_CONVERSION_MAP.keys()
-#                 for row in csv_reader:
-#                     province = None
-#                     city = None
-#                     for label in possible_province_labels:
-#                         province_string_index = row[0].lower().rfind(label)
-#                         if province_string_index >= 0:
-#                             province = TO_PROVINCE_CODE_CONVERSION_MAP[label]
-#                             city = row[0][:province_string_index].strip()
-#                             if (city, province,) not in distinct_locations:
-#                                 distinct_locations.append((city, province,))
-#                             break
-#                     if province is None or city is None:
-#                         # Store the row that doesn't fit in model in another csv file so we can look at it manually
-#                         problematic_csv_writer.writerow(row)
-#                         continue
-#                 for new_row in distinct_locations:
-#                     csv_writer.writerow(new_row)
-#
-#     print_success("Created new location file only containing distinct locations")
-
-
-def get_city_province_tuple_for_place(place):
+def get_city_province_tuple_for_place(csv_row):
+    place = csv_row[PLACE_INDEX]
     # Remove all non utf8 characters
     place = place.decode('utf-8','ignore').encode("utf-8")
     # Put everything to lowercase
@@ -485,21 +555,102 @@ def get_city_province_tuple_for_place(place):
         return city, province,
 
 
-def create_populate_fact_table(city_province_tuple_to_id_map):
-    pass
+def create_fact_table():
+    create_fact_table_query = """
+        DROP TABLE IF EXISTS disaster_db.disaster_db_schema.fact;
+        CREATE TABLE disaster_db.disaster_db_schema.fact
+        (
+            start_date_key INT REFERENCES disaster_db.disaster_db_schema.date_dimension(date_key),
+            end_date_key INT REFERENCES disaster_db.disaster_db_schema.date_dimension(date_key),
+            location_key INT REFERENCES disaster_db.disaster_db_schema.location_dimension(location_key),
+            disaster_key INT REFERENCES disaster_db.disaster_db_schema.disaster_dimension(disaster_key),
+            summary_key INT REFERENCES disaster_db.disaster_db_schema.summary_dimension(summary_key),
+            cost_key INT REFERENCES disaster_db.disaster_db_schema.cost_dimension(cost_key),
+            fatality_number DECIMAL,
+            injured_number DECIMAL,
+            evacuated_number DECIMAL,
+            -- days_between_sighting_and_posting INT,
+            PRIMARY KEY (start_date_key, end_date_key, location_key, disaster_key, summary_key)
+        );
+    """
+    execute_query(create_fact_table_query)
+    print_success("Successfully created fact table")
+
+def create_populate_fact_table(city_province_tuple_to_id_map, cost_tuple_to_id_map, disaster_tuple_to_id_map, summary_tuple_to_id_map):
+    create_fact_table()
+    with open(CSV_FILE_LOCATION, "rb") as csv_file:
+        csv_reader = csv.reader(csv_file)
+        with open(PROBLEMATIC_ROW_FILE_LOCATION, "wb") as problematic_csv_file:
+            csv_writer = csv.writer(problematic_csv_file)
+            next(csv_reader, None)
+            for csv_row in csv_reader:
+                try:
+                    # Get key from tuple to id maps when possible
+                    cost_tuple = get_cost_tuple(csv_row)
+                    cost_key = cost_tuple_to_id_map[cost_tuple]
+                    city_province_tuple = get_city_province_tuple_for_place(csv_row)
+                    location_key = city_province_tuple_to_id_map[city_province_tuple]
+                    disaster_tuple = get_disaster_tuple(csv_row)
+                    disaster_key = disaster_tuple_to_id_map[disaster_tuple]
+                    summary_tuple = get_summary_tuple_for_comment(csv_row)
+                    summary_key = summary_tuple_to_id_map[summary_tuple]
+                    # For date dimension, we need to run a query to get the start_date_key
+                    start_date = csv_row[EVENT_START_DATE_INDEX].split(" ")[0]
+                    start_date_query_result = execute_query("""
+                        SELECT  date_key FROM disaster_db.disaster_db_schema.date_dimension
+                        WHERE   date_actual = TO_DATE('%s', 'MM/DD/YYYY') LIMIT 1;
+                    """ % start_date)
+                    if len(start_date_query_result) == 1:
+                        start_date_key = start_date_query_result[0][0]
+                    else:
+                        print "no start date: " + csv_row
+                        continue
+                    # For date dimension, we need to run a query to get the end_date_key
+                    end_date = csv_row[EVENT_END_DATE_INDEX].split(" ")[0]
+                    end_date_query_result = execute_query("""
+                        SELECT  date_key FROM disaster_db.disaster_db_schema.date_dimension
+                        WHERE   date_actual = TO_DATE('%s', 'MM/DD/YYYY') LIMIT 1;
+                    """ % end_date)
+                    if len(end_date_query_result) == 1:
+                        end_date_key = end_date_query_result[0][0]
+                    else:
+                        print "no end date: " + csv_row
+                        continue
+                    # That's it for getting the keys, now we get the facts/measures
+                    fatality_number = csv_row[FATALITIES_INDEX]
+                    if fatality_number == "":
+                        fatality_number = "NULL"
+                    injured_number = csv_row[INJURED_INFECTED_INDEX]
+                    if injured_number == "":
+                        injured_number = "NULL"
+                    evacuated_number = csv_row[EVACUATED_INDEX]
+                    if evacuated_number == "":
+                        evacuated_number = "NULL"
+                    # Finally, let's try inserting the row into the fact table
+                    insert_query = """
+                        INSERT INTO disaster_db.disaster_db_schema.fact(start_date_key, end_date_key, location_key, disaster_key, summary_key, cost_key, fatality_number, injured_number, evacuated_number)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+                    """ % (start_date_key, end_date_key, location_key, disaster_key, summary_key, cost_key, fatality_number, injured_number, evacuated_number)
+                    execute_query(insert_query)
+                except:
+                    # Write row causing a problem to a csv file and continue
+                    csv_writer.writerow(csv_row)
+                    continue
+            print_success("Successfully populated fact table")
 
 
 def create_data_mart():
     log("Starting creation of data mart")
     # Start calling create_populate methods here
     create_populate_date_dimension()
-    create_summary_dimension()
-    create_disaster_dimension()
-    create_cost_dimension()
+    summary_tuple_to_id_map = create_populate_summary_dimension()
+    disaster_tuple_to_id_map = create_populate_disaster_dimension()
+    cost_tuple_to_id_map = create_populate_cost_dimension()
     city_province_tuple_to_id_map = create_populate_location_dimension()
-    create_populate_fact_table(city_province_tuple_to_id_map)
+    create_populate_fact_table(city_province_tuple_to_id_map, cost_tuple_to_id_map, disaster_tuple_to_id_map, summary_tuple_to_id_map)
 
 
+create_data_mart()
 # Connection must be closed after everything is said and done, do add or remove anything past this point
 CONNECTION.close()
 log('Connection closed')
