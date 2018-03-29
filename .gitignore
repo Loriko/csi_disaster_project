@@ -101,3 +101,5 @@ ENV/
 .mypy_cache/
 
 .idea
+/problematic_places.csv
+problematic_rows.csv

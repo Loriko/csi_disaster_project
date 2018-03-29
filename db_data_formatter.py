@@ -40,6 +40,16 @@ NGO_PAYMENTS_INDEX = 19
 UTILITY_PEOPLE_AFFECTED_INDEX = 20
 MAGNITUDE_INDEX = 21
 
+RECOGNIZED_COUNTRIES = {
+    "usa": "USA",
+    "nepal": "NEPAL",
+    "japan": "JAPAN",
+    "libya": "LIBYA",
+    "saudi arabia": "SAUDI ARABIA",
+    "iceland": "ICELAND",
+    "haiti": "HAITI",
+    "ireland": "IRELAND"
+}
 # Quebec is used as the biggest city for quebec even though it isn't the biggest city because sometimes
 # only "Quebec" is specified for the place and there is ambiguity to whether it denotes the city or the province
 MAIN_CITY_FOR_PROVINCES = {
@@ -59,13 +69,19 @@ MAIN_CITY_FOR_PROVINCES = {
 }
 TO_PROVINCE_CODE_CONVERSION_MAP = {
     "newfoundland and labrador": "NL",
+    "newfoundland" : "NL",
+    "labrador" : "NL",
     "prince edward island": "PE",
+    "maritime provinces": "NS",
+    "martime provinces": "NS",
     "nova scotia": "NS",
     "new brunswick": "NB",
     "quebec": "QC",
+    "québec": "QC",
     "ontario": "ON",
     "manitoba": "MB",
     "saskatchewan": "SK",
+    "prairie provinces" : "AB",
     "alberta": "AB",
     "british columbia": "BC",
     "yukon": "YT",
@@ -501,25 +517,26 @@ def create_populate_location_dimension():
     city_province_tuple_to_id_map = {}
     with open(CSV_FILE_LOCATION, "rb") as csv_file:
         csv_reader = csv.reader(csv_file)
-        with open(PROBLEMATIC_PLACES_FILE_LOCATION, "wb") as problematic_rows_file:
-            problematic_csv_writer = csv.writer(problematic_rows_file)
+        with open(PROBLEMATIC_PLACES_FILE_LOCATION, "wb") as problematic_places_file:
+            problematic_csv_writer = csv.writer(problematic_places_file)
             for csv_row in csv_reader:
-                city_province_tuple = get_city_province_tuple_for_place(csv_row)
-                if city_province_tuple not in city_province_tuple_to_id_map and city_province_tuple is not None:
+                city_province_country_tuple = get_city_province_country_tuple_for_place(csv_row)
+                if city_province_country_tuple not in city_province_tuple_to_id_map and city_province_country_tuple is not None:
+                    is_canada = "TRUE" if city_province_country_tuple[2] == "CANADA" else "FALSE"
                     location_key = execute_query("""
                         INSERT INTO disaster_db.disaster_db_schema.location_dimension(city, province, country, canada)
-                        VALUES ('%s', '%s', 'CANADA', TRUE)
+                        VALUES ('%s', '%s', '%s', %s)
                         RETURNING location_key;
-                    """ % city_province_tuple)
-                    city_province_tuple_to_id_map[city_province_tuple] = location_key[0][0]
-                elif city_province_tuple is None:
-                    problematic_csv_writer.writerow(csv_row)
+                    """ % (city_province_country_tuple[0], city_province_country_tuple[1], city_province_country_tuple[2], is_canada,))
+                    city_province_tuple_to_id_map[city_province_country_tuple] = location_key[0][0]
+                elif city_province_country_tuple is None:
+                    problematic_csv_writer.writerow((csv_row[PLACE_INDEX],))
                     continue
     print_success("Location dimension created")
     return city_province_tuple_to_id_map
 
 
-def get_city_province_tuple_for_place(csv_row):
+def get_city_province_country_tuple_for_place(csv_row):
     place = csv_row[PLACE_INDEX]
     # Remove all non utf8 characters
     place = place.decode('utf-8','ignore').encode("utf-8")
@@ -540,19 +557,29 @@ def get_city_province_tuple_for_place(csv_row):
     possible_province_labels = TO_PROVINCE_CODE_CONVERSION_MAP.keys()
     province = None
     city = None
+    country = None
     for label in possible_province_labels:
         province_string_index = place.lower().rfind(label)
         if province_string_index >= 0:
             province = TO_PROVINCE_CODE_CONVERSION_MAP[label]
             city = place[:province_string_index].strip()
+            country = "CANADA"
             if len(city) > 60:
                 city = city[:58] + ".."
-    if city is None or province is None:
+    if province is None:
+        for recognized_country in RECOGNIZED_COUNTRIES:
+            country_string_index = place.lower().rfind(recognized_country)
+            if country_string_index >= 0:
+                province = RECOGNIZED_COUNTRIES[recognized_country]
+                city = RECOGNIZED_COUNTRIES[recognized_country]
+                country = RECOGNIZED_COUNTRIES[recognized_country]
+
+    if city is None and province is None:
         return None
     else:
         if city is None or city == "":
             city = MAIN_CITY_FOR_PROVINCES[province]
-        return city, province,
+        return city, province, country,
 
 
 def create_fact_table():
@@ -588,8 +615,8 @@ def create_populate_fact_table(city_province_tuple_to_id_map, cost_tuple_to_id_m
                     # Get key from tuple to id maps when possible
                     cost_tuple = get_cost_tuple(csv_row)
                     cost_key = cost_tuple_to_id_map[cost_tuple]
-                    city_province_tuple = get_city_province_tuple_for_place(csv_row)
-                    location_key = city_province_tuple_to_id_map[city_province_tuple]
+                    city_province_country_tuple = get_city_province_country_tuple_for_place(csv_row)
+                    location_key = city_province_tuple_to_id_map[city_province_country_tuple]
                     disaster_tuple = get_disaster_tuple(csv_row)
                     disaster_key = disaster_tuple_to_id_map[disaster_tuple]
                     summary_tuple = get_summary_tuple_for_comment(csv_row)
