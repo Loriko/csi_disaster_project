@@ -313,6 +313,7 @@ def get_summary_tuple_for_comment(row):
                 keyword3 = "'" + matching_keywords_list[2] + "'"
     return comment, keyword1, keyword2, keyword3,
 
+
 def populate_disaster_dimension():
     disaster_tuple_to_id_map = {}
     with open(CSV_FILE_LOCATION, "rb") as csv_file:
@@ -602,6 +603,7 @@ def create_fact_table():
     """
     execute_query(create_fact_table_query)
     print_success("Successfully created fact table")
+
 
 def create_populate_fact_table(city_province_tuple_to_id_map, cost_tuple_to_id_map, disaster_tuple_to_id_map, summary_tuple_to_id_map):
     create_fact_table()
