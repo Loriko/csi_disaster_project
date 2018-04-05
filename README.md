@@ -1,14 +1,10 @@
 # csi_disaster_project
 Repository for CSI4142 Project
 
-## Data Cleaning
-Here are the steps we followed to clean the data
+## Requisites for running the project
+Before even considering to run the project, you must have a postgres database called disaster_db containing a schema called disaster_db_schema.
 
-### Location Dimension
-1. Removed the , and " characters which have special meaning in SQL or CSV and could cause our INSERTS to fail
-2. Escaped the ' characters so that our the intermediate csv we create is interpreted correctly
-3. Removed city from all the possible place names
-4. Performed minor format changes such as changing U.S.A to USA
+You must also have a python interpreter installed on your machine.
 
-### Date Dimension
-1. If start_date or end_date is given in an incorrect format, we link the fact row to a null row in our date_dimension table
+## Running the project
+To run the project, run "python db_data_formatter.py" from a terminal.
