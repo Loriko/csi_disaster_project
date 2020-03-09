@@ -1,4 +1,4 @@
-# csi_disaster_project
+# csi_disaster_project: Find outliers and trends in Canadian disasters
 Repository for CSI4142 Project
 
 ## Requisites for running the project
